@@ -4,5 +4,6 @@ CREATE TABLE IF NOT EXISTS product (
     parse_name TEXT NOT NULL,
     parent_category TEXT NOT NULL,
     min_price REAL,
-    count_of_reviews INTEGER
+    count_of_reviews INTEGER,
+    parse_min_price INTEGER
 );

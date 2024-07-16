@@ -39,6 +39,28 @@ for sql_file in sql_files:
 
 conn.commit()
 
+
+# def column_exists(cursor, table_name, column_name):
+#     cursor.execute(f"PRAGMA table_info({table_name})")
+#     columns = cursor.fetchall()
+#     for column in columns:
+#         if column[1] == column_name:
+#             return True
+#     return False
+#
+#
+# column_name = "parse_min_price"
+# table_name = "product"
+#
+# if not column_exists(cursor, table_name, column_name):
+#     alter_table_query = f"ALTER TABLE {table_name} ADD COLUMN {column_name} INTEGER;"
+#     try:
+#         cursor.execute(alter_table_query)
+#     except sqlite3.OperationalError as e:
+#         print(f"Ошибка при добавлении нового поля: {e}")
+# else:
+#     print(f"Поле '{column_name}' уже существует в таблице '{table_name}'.")
+
 data_storage = {}
 
 
@@ -62,7 +84,9 @@ def admin_menu():
     delete_category_button = types.InlineKeyboardButton("Удалить подкатегорию", callback_data="delete_category")
     delete_product_button = types.InlineKeyboardButton("Удалить товар", callback_data="delete_product")
     edit_min_price_button = types.InlineKeyboardButton("Изменить минимальную цену товара", callback_data="edit_min_price")
-    markup.add(create_global_button, create_category_button, create_product_button, delete_global_button, delete_category_button, delete_product_button, edit_min_price_button)
+    edit_parse_min_price_button = types.InlineKeyboardButton("Изменить минимальную цену товара для парсинга",
+                                                       callback_data="edit_parse_min_price")
+    markup.add(create_global_button, create_category_button, create_product_button, delete_global_button, delete_category_button, delete_product_button, edit_min_price_button, edit_parse_min_price_button)
     return markup
 
 
@@ -70,14 +94,14 @@ def admin_menu():
 async def send_welcome(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
 
-    cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+    cursor.execute("SELECT * FROM  users WHERE user_id = ?", (user_id,))
     existing_user = cursor.fetchone()
 
-    await message.reply("🖐 Добро пожаловать в МАГАЗИН СБ!\n"
-                        "👟 У нас вы найдете оригинальные вещи из магазина POIZON, "
-                        "которые отлично дополнят ваш аутфит\n\n"
-                        "✅ Приобретая вещи у нас, вы получаете не только трендовые "
-                        "и оригинальные изделия, но и гарантию качества. "
+    await message.reply(f"🖐 Добро пожаловать в {config.shop_name}!\n"
+                        "Я - бот с каталогом товаров. Педали, шмотки, штаны для катки и не только.\n\n"
+                        # "👟 У нас вы найдете оригинальные вещи из магазина POIZON, "
+                        # "которые отлично дополнят ваш аутфит.\n\n"
+                        "✅ Приобретая вещи у нас, вы получаете оригинальные товары по цене ниже рынка с гарантией качества. "
                         "Команда профессионалов всегда готова помочь вам с выбором и ответить на все вопросы.\n\n"
                         "📱 Выберите пункт из меню:", reply_markup=main_menu())
 
@@ -107,6 +131,7 @@ class CreateProduct(StatesGroup):
     waiting_for_parse_name = State()
     waiting_for_category = State()
     waiting_for_min_price = State()
+    waiting_for_parse_min_price = State()
     waiting_for_photo_count = State()
     waiting_for_photos = State()
 
@@ -118,6 +143,11 @@ class FindProductById(StatesGroup):
 class EditMinPrice(StatesGroup):
     waiting_for_product_id = State()
     waiting_for_min_price = State()
+
+
+class EditParseMinPrice(StatesGroup):
+    waiting_for_parse_product_id = State()
+    waiting_for_parse_min_price = State()
 
 
 class DeleteProduct(StatesGroup):
@@ -143,6 +173,13 @@ async def find_product_by_id(callback_query: CallbackQuery):
 async def edit_min_price(callback_query: CallbackQuery):
     await bot.send_message(callback_query.from_user.id, "Введите код товара:")
     await EditMinPrice.waiting_for_product_id.set()
+    await bot.answer_callback_query(callback_query.id)
+
+
+@dp.callback_query_handler(lambda c: c.data == 'edit_parse_min_price')
+async def edit_parse_min_price(callback_query: CallbackQuery):
+    await bot.send_message(callback_query.from_user.id, "Введите код товара:")
+    await EditParseMinPrice.waiting_for_parse_product_id.set()
     await bot.answer_callback_query(callback_query.id)
 
 
@@ -326,6 +363,31 @@ async def process_edit_product_id(message: types.Message, state: FSMContext):
         await state.finish()
 
 
+@dp.message_handler(state=EditParseMinPrice.waiting_for_parse_product_id, content_types=ContentType.TEXT)
+async def process_edit_parse_product_id(message: types.Message, state: FSMContext):
+    try:
+        product_id = int(message.text.strip())
+        cursor.execute("SELECT * FROM product WHERE id = ?", (product_id,))
+        product = cursor.fetchone()
+
+        if not product:
+            await message.reply("Товар с указанным кодом не найден.")
+            await state.finish()
+            return
+
+        async with state.proxy() as data:
+            data['product_id'] = product_id
+
+        await message.reply("Введите новую минимальную цену товара для парсинга:")
+        await EditParseMinPrice.waiting_for_parse_min_price.set()
+    except ValueError:
+        await message.reply("Введите корректный код товара, состоящий из цифр.")
+    except Exception as e:
+        logging.error(f"Произошла ошибка: {e}")
+        await message.reply("Произошла ошибка. Пожалуйста, попробуйте ещё раз.")
+        await state.finish()
+
+
 @dp.message_handler(state=EditMinPrice.waiting_for_min_price, content_types=ContentType.TEXT)
 async def process_edit_min_price(message: types.Message, state: FSMContext):
     try:
@@ -336,7 +398,27 @@ async def process_edit_min_price(message: types.Message, state: FSMContext):
 
         cursor.execute("UPDATE product SET min_price = ? WHERE id = ?;", (new_min_price, product_id,))
 
-        await message.reply(f"Для товара с кодом {product_id} цена изменена на {new_min_price}.")
+        await message.reply(f"Для товара с кодом {product_id} цена изменена на {new_min_price} ₽.")
+        await state.finish()
+    except ValueError:
+        await message.reply("Введите корректную стоимость, состоящую из цифр.")
+    except Exception as e:
+        logging.error(f"Произошла ошибка: {e}")
+        await message.reply("Произошла ошибка. Пожалуйста, попробуйте ещё раз.")
+        await state.finish()
+
+
+@dp.message_handler(state=EditParseMinPrice.waiting_for_parse_min_price, content_types=ContentType.TEXT)
+async def process_edit_parse_min_price(message: types.Message, state: FSMContext):
+    try:
+        async with state.proxy() as data:
+            product_id = data.get('product_id')
+
+        new_parse_min_price = float(message.text.strip())
+
+        cursor.execute("UPDATE product SET parse_min_price = ? WHERE id = ?;", (new_parse_min_price, product_id,))
+
+        await message.reply(f"Для товара с кодом {product_id} цена для парсинга изменена на {new_parse_min_price} ₽.")
         await state.finish()
     except ValueError:
         await message.reply("Введите корректную стоимость, состоящую из цифр.")
@@ -419,7 +501,17 @@ async def process_parse_name(message: types.Message, state: FSMContext):
     async with state.proxy() as data:
         data['parse_name'] = parse_name
 
-    await message.reply("Введите количество фотографий товара:")
+    await message.reply("Введите минимальную цену на товар, указанную на сайте:")
+    await CreateProduct.waiting_for_parse_min_price.set()
+
+
+@dp.message_handler(state=CreateProduct.waiting_for_parse_min_price, content_types=ContentType.TEXT)
+async def process_parse_min_price(message: types.Message, state: FSMContext):
+    parse_name = int(message.text.strip())
+    async with state.proxy() as data:
+        data['parse_min_price'] = parse_name
+
+    await message.reply("Введите количество фото товара:")
     await CreateProduct.waiting_for_photo_count.set()
 
 
@@ -447,6 +539,7 @@ async def process_photos(message: types.Message, state: FSMContext):
         parse_name = data.get('parse_name')
         parent_category = data.get('parent_category')
         min_price = data.get('min_price')
+        parse_min_price = data.get('parse_min_price')
 
         photo_file = io.BytesIO()
         await message.photo[-1].download(destination=photo_file)
@@ -458,8 +551,8 @@ async def process_photos(message: types.Message, state: FSMContext):
         if existing_product:
             product_id = existing_product[0]
         else:
-            cursor.execute("INSERT INTO product (name, parse_name, parent_category, min_price) VALUES (?, ?, ?, ?)",
-                           (product_name, parse_name, parent_category, min_price))
+            cursor.execute("INSERT INTO product (name, parse_name, parent_category, min_price, parse_min_price) VALUES (?, ?, ?, ?, ?)",
+                           (product_name, parse_name, parent_category, min_price, parse_min_price))
             product_id = cursor.lastrowid
 
         cursor.execute("INSERT INTO product_photos (product_id, photo) VALUES (?, ?)", (product_id, photo_file.read()))
@@ -578,7 +671,7 @@ async def process_parent_category_name(message: types.Message, state: FSMContext
 async def buy_product(callback_query: CallbackQuery):
     await bot.send_message(
         callback_query.from_user.id,
-        f"Для покупки товара напишите менеджеру {config.manager_request}\n\n"
+        f"Для покупки товара напишите: {config.manager_request}\n\n"
         f"Обязательно укажите *код товара* \\(указан внизу описания товара\\) и *размер*",
         parse_mode='MarkdownV2'
     )
@@ -587,19 +680,19 @@ async def buy_product(callback_query: CallbackQuery):
 
 @dp.callback_query_handler(lambda c: c.data == 'tracking')
 async def tracking(callback_query: CallbackQuery):
-    await bot.send_message(callback_query.from_user.id, f"Обратитесь к менеджеру по поводу отслеживания заказа {config.manager_request}")
+    await bot.send_message(callback_query.from_user.id, f"По поводу отслеживания заказа обратитесь к: {config.manager_request}")
     await bot.answer_callback_query(callback_query.id)
 
 
 @dp.callback_query_handler(lambda c: c.data == 'question')
 async def question(callback_query: CallbackQuery):
-    await bot.send_message(callback_query.from_user.id, f"По всем вопросам обращайтесь к менеджеру {config.manager_request}")
+    await bot.send_message(callback_query.from_user.id, f"По всем вопросам обращайтесь к: {config.manager_request}")
     await bot.answer_callback_query(callback_query.id)
 
 
 @dp.callback_query_handler(lambda c: c.data == 'find_product_by_id')
 async def question(callback_query: CallbackQuery):
-    await bot.send_message(callback_query.from_user.id, f"По всем вопросам обращайтесь к менеджеру {config.manager_request}")
+    await bot.send_message(callback_query.from_user.id, f"По всем вопросам обращайтесь к: {config.manager_request}")
     await bot.answer_callback_query(callback_query.id)
 
 
@@ -660,13 +753,13 @@ async def parse_price_handler(callback_query: CallbackQuery):
         name = data['name']
         parse_name = data['parse_name']
     else:
-        await bot.send_message(callback_query.from_user.id, f"Цены на товар не найдены. Уточните цену у менеджера {config.manager_request}")
+        await bot.send_message(callback_query.from_user.id, f"Цены на товар не найдены. Уточните цену у: {config.manager_request}")
         return
 
     sent_message = await bot.send_message(callback_query.from_user.id, "Подождите, бот ищет цены на размеры...")
     try:
         cursor.execute('''
-                SELECT count_of_reviews 
+                SELECT count_of_reviews, parse_min_price
                 FROM product 
                 WHERE parse_name = ?
             ''', (parse_name,))
@@ -675,6 +768,7 @@ async def parse_price_handler(callback_query: CallbackQuery):
 
         if result:
             current_count = result[0]
+            parse_min_price = result[1]
 
             if current_count is None:
                 current_count = 0
@@ -696,19 +790,19 @@ async def parse_price_handler(callback_query: CallbackQuery):
 
     cursor.execute("SELECT min_price FROM product WHERE parse_name = ?;", (parse_name,))
     min_price = cursor.fetchone()[0]
-    sizes_prices = parse_price(parse_name)
+    sizes_prices = parse_price(parse_name, parse_min_price)
     price_info = f"{escape_markdown(name)}:\n\n"
     await bot.delete_message(chat_id=callback_query.from_user.id, message_id=sent_message.message_id)
     if sizes_prices:
         for size, price in sizes_prices.items():
-            price_info += f"Размер: *{escape_markdown(str(size))}* {escape_markdown("-")} Цена: *{escape_markdown(str(price))}*\n\n"
+            price_info += f"Размер: *{escape_markdown(str(size))}* {escape_markdown("-")} Цена: *{escape_markdown(str(price))} ₽*\n\n"
     else:
         if min_price:
-            price_info += (f"Цена: от {escape_markdown(str(min_price))}\n\n"
-                           f"Подробности цены на размер уточните у менеджера {escape_markdown(config.manager_request)}\n"
+            price_info += (f"Цена: от {escape_markdown(str(min_price))} ₽\n\n"
+                           f"Подробности цены на размер уточните у: {escape_markdown(config.manager_request)}\n"
                            f"Обязательно укажите *размер* и *код товара*\n")
         else:
-            price_info = f"Цены на товар не найдены. Уточните цену у менеджера {config.manager_request}"
+            price_info = f"Цены на товар не найдены. Уточните цену у: {config.manager_request}"
 
     await bot.send_message(callback_query.from_user.id, price_info, parse_mode='MarkdownV2')
 
